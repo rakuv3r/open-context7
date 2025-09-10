@@ -1,0 +1,78 @@
+services:
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+
+  # FastAPI backend
+  api:
+    image: python:3.12-slim
+    working_dir: /workspace
+    command: |
+      sh -c "
+      echo '🚀 Starting API service...' &&
+      apt-get update -qq && apt-get install -y -qq git curl make > /dev/null &&
+      curl -LsSf https://astral.sh/uv/install.sh | sh &&
+      export PATH=/root/.local/bin:\$PATH &&
+      rm -rf * .* 2>/dev/null || true &&
+      git clone -q https://github.com/rakuv3r/open-context7-api.git . &&
+      if [ ! -f /mnt/.env.dev ]; then
+        echo '❌ Error: .env.dev not found!'
+        echo '📝 Please create .env.dev with required settings:'
+        echo '   cp .env.example .env.dev'
+        echo '   # Edit .env.dev with your API keys and settings'
+        echo '   # Required: QDRANT_URL, CHAT_API_KEY, EMBEDDING_API_KEY, etc.'
+        exit 1
+      fi &&
+      cp /mnt/.env.dev .env.dev &&
+      make install &&
+      echo '✅ API server ready!' &&
+      uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+      "
+    ports:
+      - "8000:8000"
+    depends_on:
+      - qdrant
+    volumes:
+      - ./.env.dev:/mnt/.env.dev:ro
+
+  # Next.js frontend
+  web:
+    image: node:18-alpine
+    working_dir: /workspace
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost/api/api/v1
+    command: |
+      sh -c "
+      echo '🎨 Starting Web service...' &&
+      apk add --no-cache git > /dev/null 2>&1 &&
+      rm -rf * .* 2>/dev/null || true &&
+      git clone -q https://github.com/rakuv3r/open-context7-web.git . &&
+      npm install --silent &&
+      echo '✅ Web server ready!' &&
+      npm run dev -- --hostname 0.0.0.0
+      "
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # Qdrant vector database
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
